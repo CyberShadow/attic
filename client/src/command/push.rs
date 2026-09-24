@@ -112,7 +112,7 @@ impl PushContext {
     }
 
     async fn push_stdin(self) -> Result<()> {
-        let session = self.pusher.into_push_session(PushSessionConfig {
+        let mut session = self.pusher.into_push_session(PushSessionConfig {
             no_closure: self.no_closure,
             ignore_upstream_cache_filter: self.ignore_upstream_cache_filter,
         });

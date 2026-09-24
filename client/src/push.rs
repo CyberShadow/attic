@@ -109,13 +109,11 @@ pub struct PushSession {
 
 enum SessionQueueCommand {
     Paths(Vec<StorePath>),
-    Flush,
     Terminate,
 }
 
 enum SessionQueuePoll {
     Paths(Vec<StorePath>),
-    Flush,
     Terminate,
     Closed,
     TimedOut,
@@ -307,7 +305,6 @@ impl PushSession {
                         let poll = tokio::select! {
                             r = receiver.recv() => match r {
                                 Ok(SessionQueueCommand::Paths(paths)) => SessionQueuePoll::Paths(paths),
-                                Ok(SessionQueueCommand::Flush) => SessionQueuePoll::Flush,
                                 Ok(SessionQueueCommand::Terminate) => SessionQueuePoll::Terminate,
                                 _ => SessionQueuePoll::Closed,
                             },
@@ -321,7 +318,7 @@ impl PushSession {
                             SessionQueuePoll::Closed | SessionQueuePoll::Terminate => {
                                 break true;
                             }
-                            SessionQueuePoll::Flush | SessionQueuePoll::TimedOut => {
+                            SessionQueuePoll::TimedOut => {
                                 break false;
                             }
                         }
@@ -373,9 +370,8 @@ impl PushSession {
 
     /// Waits for all workers to terminate, returning all results.
     pub async fn wait(mut self) -> Result<HashMap<StorePath, Result<()>>> {
-        self.flush()?;
-
-        // The worker might have died
+        // Fails if the worker has died, in which case its error is already
+        // in the result channel.
         let _ = self.sender.send(SessionQueueCommand::Terminate).await;
 
         self.result_receiver
@@ -385,17 +381,22 @@ impl PushSession {
     }
 
     /// Queues multiple store paths to be pushed.
-    pub fn queue_many(&self, store_paths: Vec<StorePath>) -> Result<()> {
-        self.sender
-            .send_blocking(SessionQueueCommand::Paths(store_paths))
-            .map_err(|e| anyhow!(e))
+    pub fn queue_many(&mut self, store_paths: Vec<StorePath>) -> Result<()> {
+        self.send(SessionQueueCommand::Paths(store_paths))
     }
 
-    /// Flushes the worker queue.
-    pub fn flush(&self) -> Result<()> {
-        self.sender
-            .send_blocking(SessionQueueCommand::Flush)
-            .map_err(|e| anyhow!(e))
+    fn send(&mut self, command: SessionQueueCommand) -> Result<()> {
+        if self.sender.send_blocking(command).is_ok() {
+            return Ok(());
+        }
+
+        // The queue closes when the worker exits, which it does before
+        // termination only after sending its error to the result channel.
+        match self.result_receiver.try_recv() {
+            Ok(Err(e)) => Err(e.context("Push session worker failed")),
+            Ok(Ok(_)) => unreachable!("Push session worker exited before termination"),
+            Err(_) => Err(anyhow!("Push session worker panicked")),
+        }
     }
 }
 

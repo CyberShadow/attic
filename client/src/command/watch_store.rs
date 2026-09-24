@@ -73,7 +73,7 @@ pub async fn run(opts: Opts) -> Result<()> {
     };
 
     let mp = MultiProgress::new();
-    let session = Pusher::new(
+    let mut session = Pusher::new(
         store.clone(),
         api,
         cache.to_owned(),
@@ -113,7 +113,7 @@ pub async fn run(opts: Opts) -> Result<()> {
                         .collect::<Vec<StorePath>>();
 
                     if !paths.is_empty() {
-                        session.queue_many(paths).unwrap();
+                        session.queue_many(paths)?;
                     }
                 }
             }
