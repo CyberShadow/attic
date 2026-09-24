@@ -37,10 +37,8 @@ use axum::{
     extract::Extension,
     http::{Uri, uri::Scheme},
 };
-use sea_orm::{
-    ConnectOptions, ConnectionTrait, Database, DatabaseConnection, DatabaseConnectionType,
-    query::Statement,
-};
+use sea_orm::sqlx::sqlite::{SqliteJournalMode, SqliteSynchronous};
+use sea_orm::{ConnectOptions, ConnectionTrait, Database, DatabaseConnection, query::Statement};
 use tokio::net::TcpListener;
 use tokio::sync::OnceCell;
 use tokio::time;
@@ -122,30 +120,22 @@ impl StateInner {
                     opt.acquire_timeout(acquire_timeout);
                 }
 
-                let db = Database::connect(opt)
-                    .await
-                    .map_err(ServerError::database_error);
-                if let Ok(db_conn) = &db
-                    && let DatabaseConnectionType::SqlxSqlitePoolConnection(conn) = &db_conn.inner
-                {
-                    // execute some sqlite-specific performance optimizations
-                    // see https://phiresky.github.io/blog/2020/sqlite-performance-tuning/ for
-                    // more details
-                    // intentionally ignore errors from this: this is purely for performance,
-                    // not for correctness, so we can live without this
-                    _ = conn
-                        .execute_unprepared(
-                            "
-                        pragma journal_mode=WAL;
-                        pragma synchronous=normal;
-                        pragma temp_store=memory;
-                        pragma mmap_size = 30000000000;
-                        ",
-                        )
-                        .await;
-                }
+                // SQLite-specific performance optimizations, see
+                // https://phiresky.github.io/blog/2020/sqlite-performance-tuning/
+                //
+                // These are applied to every connection the pool opens, as
+                // (except for journal_mode) they are per-connection settings.
+                opt.map_sqlx_sqlite_opts(|sqlite_opts| {
+                    sqlite_opts
+                        .journal_mode(SqliteJournalMode::Wal)
+                        .synchronous(SqliteSynchronous::Normal)
+                        .pragma("temp_store", "memory")
+                        .pragma("mmap_size", "30000000000")
+                });
 
-                db
+                Database::connect(opt)
+                    .await
+                    .map_err(ServerError::database_error)
             })
             .await
     }
