@@ -9,7 +9,7 @@ use futures::future::join_all;
 use sea_orm::entity::prelude::*;
 use sea_orm::query::QuerySelect;
 use sea_orm::sea_query::{LockBehavior, LockType, Query};
-use sea_orm::{ConnectionTrait, ExprTrait, FromQueryResult};
+use sea_orm::{ConnectionTrait, ExprTrait, FromQueryResult, QueryOrder};
 use tokio::sync::Semaphore;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
@@ -219,57 +219,67 @@ async fn run_reap_orphan_chunks(state: &State) -> Result<()> {
 
     db.execute_raw(transition_statement).await?;
 
-    let orphan_chunks: Vec<chunk::Model> = Chunk::find()
-        .filter(chunk::Column::State.eq(ChunkState::Deleted))
-        .limit(orphan_chunk_limit)
-        .all(db)
-        .await?;
+    // Reap Deleted chunks in batches, in order of ID, so that chunks
+    // that fail to be deleted are skipped until the next run rather than
+    // retried by (or blocking) this one.
+    let delete_limit = Arc::new(Semaphore::new(20)); // TODO: Make this configurable
+    let mut after_id = i64::MIN;
+    let mut deleted_count = 0;
+    loop {
+        let orphan_chunks: Vec<chunk::Model> = Chunk::find()
+            .filter(chunk::Column::State.eq(ChunkState::Deleted))
+            .filter(chunk::Column::Id.gt(after_id))
+            .order_by_asc(chunk::Column::Id)
+            .limit(orphan_chunk_limit)
+            .all(db)
+            .await?;
 
-    if orphan_chunks.is_empty() {
-        return Ok(());
+        let Some(last_chunk) = orphan_chunks.last() else {
+            break;
+        };
+        after_id = last_chunk.id;
+
+        // Delete the chunks from remote storage
+        let futures: Vec<_> = orphan_chunks
+            .into_iter()
+            .map(|chunk| {
+                let delete_limit = delete_limit.clone();
+                async move {
+                    let permit = delete_limit.acquire().await?;
+                    storage.delete_file_db(&chunk.remote_file.0).await?;
+                    drop(permit);
+                    Result::<_, anyhow::Error>::Ok(chunk.id)
+                }
+            })
+            .collect();
+
+        // Deletions can result in spurious failures, tolerate them
+        //
+        // Chunks that failed to be deleted from the remote storage will
+        // stay in Deleted state until the next run.
+        let deleted_chunk_ids: Vec<_> = join_all(futures)
+            .await
+            .into_iter()
+            .filter(|r| {
+                if let Err(e) = r {
+                    tracing::warn!("Deletion failed: {}", e);
+                }
+
+                r.is_ok()
+            })
+            .map(|r| r.unwrap())
+            .collect();
+
+        // Finally, delete them from the database
+        let deletion = Chunk::delete_many()
+            .filter(chunk::Column::Id.is_in(deleted_chunk_ids))
+            .exec(db)
+            .await?;
+
+        deleted_count += deletion.rows_affected;
     }
 
-    // Delete the chunks from remote storage
-    let delete_limit = Arc::new(Semaphore::new(20)); // TODO: Make this configurable
-    let futures: Vec<_> = orphan_chunks
-        .into_iter()
-        .map(|chunk| {
-            let delete_limit = delete_limit.clone();
-            async move {
-                let permit = delete_limit.acquire().await?;
-                storage.delete_file_db(&chunk.remote_file.0).await?;
-                drop(permit);
-                Result::<_, anyhow::Error>::Ok(chunk.id)
-            }
-        })
-        .collect();
-
-    // Deletions can result in spurious failures, tolerate them
-    //
-    // Chunks that failed to be deleted from the remote storage will
-    // just be stuck in Deleted state.
-    //
-    // TODO: Maybe have an interactive command to retry deletions?
-    let deleted_chunk_ids: Vec<_> = join_all(futures)
-        .await
-        .into_iter()
-        .filter(|r| {
-            if let Err(e) = r {
-                tracing::warn!("Deletion failed: {}", e);
-            }
-
-            r.is_ok()
-        })
-        .map(|r| r.unwrap())
-        .collect();
-
-    // Finally, delete them from the database
-    let deletion = Chunk::delete_many()
-        .filter(chunk::Column::Id.is_in(deleted_chunk_ids))
-        .exec(db)
-        .await?;
-
-    tracing::info!("Deleted {} orphan chunks", deletion.rows_affected);
+    tracing::info!("Deleted {} orphan chunks", deleted_count);
 
     Ok(())
 }
