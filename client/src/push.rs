@@ -34,6 +34,7 @@ use tokio::time;
 
 use crate::api::ApiClient;
 use attic::api::v1::cache_config::CacheConfig;
+use attic::api::v1::get_missing_paths;
 use attic::api::v1::upload_path::{UploadPathNarInfo, UploadPathResult, UploadPathResultKind};
 use attic::cache::CacheName;
 use attic::error::AtticResult;
@@ -476,11 +477,12 @@ impl PushPlan {
         }
 
         // Query missing paths
-        let missing_path_hashes: HashSet<StorePathHash> = {
-            let store_path_hashes = store_path_map.keys().map(|sph| sph.to_owned()).collect();
-            let res = api.get_missing_paths(cache, store_path_hashes).await?;
-            res.missing_paths.into_iter().collect()
-        };
+        let mut missing_path_hashes: HashSet<StorePathHash> = HashSet::new();
+        let store_path_hashes: Vec<StorePathHash> = store_path_map.keys().cloned().collect();
+        for batch in store_path_hashes.chunks(get_missing_paths::MAX_STORE_PATH_HASHES) {
+            let res = api.get_missing_paths(cache, batch.to_vec()).await?;
+            missing_path_hashes.extend(res.missing_paths);
+        }
         store_path_map.retain(|sph, _| missing_path_hashes.contains(sph));
         let num_missing_paths = store_path_map.len();
 
