@@ -12,6 +12,12 @@ use crate::{RequestState, State};
 use attic::api::v1::get_missing_paths::{GetMissingPathsRequest, GetMissingPathsResponse};
 use attic::nix_store::StorePathHash;
 
+/// The maximum number of hashes bound in a single query.
+///
+/// SQLite limits a statement to 32766 variables (and PostgreSQL to 65535),
+/// while the request body limit admits about 58000 hashes.
+const QUERY_BATCH_SIZE: usize = 10_000;
+
 #[derive(FromQueryResult)]
 struct StorePathHashOnly {
     store_path_hash: String,
@@ -41,22 +47,26 @@ pub(crate) async fn get_missing_paths(
         .iter()
         .map(|h| h.as_str().to_owned())
         .collect();
+    let requested_hashes_vec: Vec<&String> = requested_hashes.iter().collect();
 
-    let query_in = requested_hashes.iter().map(|h| Value::from(h.to_owned()));
+    let mut found_hashes: HashSet<String> = HashSet::new();
+    for batch in requested_hashes_vec.chunks(QUERY_BATCH_SIZE) {
+        let query_in = batch.iter().map(|h| Value::from(h.as_str()));
 
-    let result: Vec<StorePathHashOnly> = Object::find()
-        .select_only()
-        .column_as(object::Column::StorePathHash, "store_path_hash")
-        .join(sea_orm::JoinType::InnerJoin, object::Relation::Cache.def())
-        .join(sea_orm::JoinType::InnerJoin, object::Relation::Nar.def())
-        .filter(cache::Column::Name.eq(payload.cache.as_str()))
-        .filter(object::Column::StorePathHash.is_in(query_in))
-        .into_model::<StorePathHashOnly>()
-        .all(database)
-        .await
-        .map_err(ServerError::database_error)?;
+        let result: Vec<StorePathHashOnly> = Object::find()
+            .select_only()
+            .column_as(object::Column::StorePathHash, "store_path_hash")
+            .join(sea_orm::JoinType::InnerJoin, object::Relation::Cache.def())
+            .join(sea_orm::JoinType::InnerJoin, object::Relation::Nar.def())
+            .filter(cache::Column::Name.eq(payload.cache.as_str()))
+            .filter(object::Column::StorePathHash.is_in(query_in))
+            .into_model::<StorePathHashOnly>()
+            .all(database)
+            .await
+            .map_err(ServerError::database_error)?;
 
-    let found_hashes: HashSet<String> = result.into_iter().map(|row| row.store_path_hash).collect();
+        found_hashes.extend(result.into_iter().map(|row| row.store_path_hash));
+    }
 
     // Safety: All requested_hashes are validated `StorePathHash`es.
     // No need to pay the cost of checking again
