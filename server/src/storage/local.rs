@@ -122,6 +122,16 @@ impl LocalBackend {
         let level2 = &p[0..2];
         self.config.path.join(level1).join(level2).join(p)
     }
+
+    /// Removes a file, succeeding if it does not exist (like S3's
+    /// DeleteObject), so that a missing file does not leave its chunk
+    /// stuck in the Deleted state.
+    async fn remove_file(&self, name: &str) -> ServerResult<()> {
+        match fs::remove_file(self.get_path(name)).await {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => Err(ServerError::storage_error(e)),
+            _ => Ok(()),
+        }
+    }
 }
 
 impl StorageBackend for LocalBackend {
@@ -156,11 +166,7 @@ impl StorageBackend for LocalBackend {
     }
 
     async fn delete_file(&self, name: String) -> ServerResult<()> {
-        fs::remove_file(self.get_path(&name))
-            .await
-            .map_err(ServerError::storage_error)?;
-
-        Ok(())
+        self.remove_file(&name).await
     }
 
     async fn delete_file_db(&self, file: &RemoteFile) -> ServerResult<()> {
@@ -173,11 +179,7 @@ impl StorageBackend for LocalBackend {
             .into());
         };
 
-        fs::remove_file(self.get_path(&file.name))
-            .await
-            .map_err(ServerError::storage_error)?;
-
-        Ok(())
+        self.remove_file(&file.name).await
     }
 
     async fn download_file_db(
