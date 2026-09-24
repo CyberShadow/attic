@@ -217,26 +217,28 @@ pub struct DatabaseConfig {
 
     /// Maximum number of connections in the database pool.
     ///
-    /// The default is 25 connections, which should be sufficient for most workloads.
+    /// Unset, this is 1 for SQLite and the SQLx default (10) otherwise.
     /// When uploading large files with many chunks, multiple concurrent tasks may hold
     /// connections simultaneously, so this should be set high enough to avoid pool exhaustion.
     #[serde(rename = "max-connections")]
-    #[serde(default = "default_db_max_connections")]
-    pub max_connections: u32,
+    #[serde(default)]
+    pub max_connections: Option<u32>,
 
     /// Minimum number of connections in the database pool.
+    ///
+    /// Unset, this is the SQLx default (0).
     #[serde(rename = "min-connections")]
-    #[serde(default = "default_db_min_connections")]
-    pub min_connections: u32,
+    #[serde(default)]
+    pub min_connections: Option<u32>,
 
     /// Maximum time to wait when acquiring a connection from the pool.
     ///
-    /// The default is 10 seconds. Increase this if you see "Failed to acquire
-    /// connection from pool" errors under load, for example when an SQLite
-    /// backend serializes writes and connections are held for longer.
+    /// Unset, this is the SQLx default (30 seconds). Increase this if you see
+    /// "Failed to acquire connection from pool" errors under load, for example
+    /// when an SQLite backend serializes writes and connections are held for longer.
     #[serde(rename = "acquire-timeout")]
-    #[serde(with = "humantime_serde", default = "default_db_acquire_timeout")]
-    pub acquire_timeout: Duration,
+    #[serde(with = "humantime_serde", default)]
+    pub acquire_timeout: Option<Duration>,
 }
 
 /// File storage configuration.
@@ -572,18 +574,6 @@ fn default_listen_address() -> SocketAddr {
 
 fn default_db_heartbeat() -> bool {
     false
-}
-
-fn default_db_max_connections() -> u32 {
-    25
-}
-
-fn default_db_min_connections() -> u32 {
-    1
-}
-
-fn default_db_acquire_timeout() -> Duration {
-    Duration::from_secs(10)
 }
 
 fn default_soft_delete_caches() -> bool {

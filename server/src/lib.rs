@@ -110,10 +110,17 @@ impl StateInner {
     async fn database(&self) -> ServerResult<&DatabaseConnection> {
         self.database
             .get_or_try_init(|| async {
-                let mut opt = ConnectOptions::new(&self.config.database.url);
-                opt.min_connections(self.config.database.min_connections)
-                    .max_connections(self.config.database.max_connections)
-                    .acquire_timeout(self.config.database.acquire_timeout);
+                let db_config = &self.config.database;
+                let mut opt = ConnectOptions::new(&db_config.url);
+                if let Some(max_connections) = db_config.max_connections {
+                    opt.max_connections(max_connections);
+                }
+                if let Some(min_connections) = db_config.min_connections {
+                    opt.min_connections(min_connections);
+                }
+                if let Some(acquire_timeout) = db_config.acquire_timeout {
+                    opt.acquire_timeout(acquire_timeout);
+                }
 
                 let db = Database::connect(opt)
                     .await
