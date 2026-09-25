@@ -131,6 +131,12 @@ impl StateInner {
                         .synchronous(SqliteSynchronous::Normal)
                         .pragma("temp_store", "memory")
                         .pragma("mmap_size", "30000000000")
+                        // Keeps the query planner's statistics current, as
+                        // recommended for long-lived connections. Without
+                        // them, SQLite cannot tell that e.g. chunk_hash is
+                        // far more selective than state, and may look chunks
+                        // up by the latter, scanning nearly the whole table.
+                        .pragma("optimize", "0x10002")
                 });
 
                 Database::connect(opt)
