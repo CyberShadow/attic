@@ -134,7 +134,7 @@ impl Model {
             system: self.system.to_owned(),
             references: self.references.0.to_owned(),
             deriver: self.deriver.to_owned(),
-            signature: None,
+            signatures: self.sigs.0.to_owned(),
             ca: self.ca.to_owned(),
         })
     }

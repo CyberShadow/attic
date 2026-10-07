@@ -149,12 +149,10 @@ async fn get_store_path_info(
 
     req_state.set_public_cache(cache.is_public);
 
+    // The cache's own signature is added to those supplied by the client,
+    // so that the object stays trusted by those who trust the client.
     let mut narinfo = object.to_nar_info(&nar)?;
-
-    if narinfo.signature().is_none() {
-        let keypair = cache.keypair()?;
-        narinfo.sign(&keypair);
-    }
+    narinfo.sign(&cache.keypair()?);
 
     Ok(narinfo)
 }

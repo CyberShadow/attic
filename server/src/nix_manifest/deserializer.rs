@@ -4,7 +4,7 @@
 
 use std::ops::{AddAssign, MulAssign};
 
-use serde::de::{DeserializeSeed, IntoDeserializer, MapAccess, Visitor};
+use serde::de::{DeserializeSeed, IntoDeserializer, MapAccess, SeqAccess, Visitor};
 use serde::{de, forward_to_deserialize_any};
 
 use super::{Error, Result};
@@ -12,14 +12,30 @@ use super::{Error, Result};
 /// The main deserializer.
 pub struct Deserializer<'de> {
     input: &'de str,
+
+    /// The key of the value being deserialized.
+    key: &'de str,
+
+    /// Whether a sequence is being deserialized.
+    in_seq: bool,
 }
 
 /// Deserializer for values.
 pub struct ValueDeserializer<'a, 'de: 'a>(&'a mut Deserializer<'de>);
 
+/// Access to the values of a repeated key.
+struct RepeatedKey<'a, 'de: 'a> {
+    de: &'a mut Deserializer<'de>,
+    first: bool,
+}
+
 impl<'de> Deserializer<'de> {
     pub fn from_str(input: &'de str) -> Self {
-        Deserializer { input }
+        Deserializer {
+            input,
+            key: "",
+            in_seq: false,
+        }
     }
 }
 
@@ -147,6 +163,7 @@ impl<'de> de::Deserializer<'de> for &mut Deserializer<'de> {
 
         let identifier = &self.input[..colon];
 
+        self.key = identifier;
         self.input = &self.input[colon..];
         visitor.visit_borrowed_str(identifier)
     }
@@ -179,6 +196,31 @@ impl<'de> MapAccess<'de> for Deserializer<'de> {
         self.consume_whitespace()?;
 
         seed.deserialize(&mut ValueDeserializer(self))
+    }
+}
+
+impl<'de> SeqAccess<'de> for RepeatedKey<'_, 'de> {
+    type Error = Error;
+
+    fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>>
+    where
+        T: DeserializeSeed<'de>,
+    {
+        if self.first {
+            self.first = false;
+        } else {
+            let line = self.de.input.trim_start_matches([' ', '\n', '\r', '\t']);
+            match line
+                .strip_prefix(self.de.key)
+                .and_then(|rest| rest.strip_prefix(':'))
+            {
+                Some(rest) => self.de.input = rest,
+                None => return Ok(None),
+            }
+            self.de.consume_whitespace()?;
+        }
+
+        seed.deserialize(&mut ValueDeserializer(self.de)).map(Some)
     }
 }
 
@@ -335,11 +377,23 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut ValueDeserializer<'a, 'de> {
         visitor.visit_newtype_struct(self)
     }
 
-    fn deserialize_seq<V>(self, _visitor: V) -> Result<V::Value>
+    // A sequence is deserialized from the values of its key repeated on
+    // consecutive lines.
+    fn deserialize_seq<V>(self, visitor: V) -> Result<V::Value>
     where
         V: Visitor<'de>,
     {
-        Err(Error::Unsupported("Sequence"))
+        if self.0.in_seq {
+            return Err(Error::NestedSequenceUnsupported);
+        }
+
+        self.0.in_seq = true;
+        let value = visitor.visit_seq(RepeatedKey {
+            de: &mut *self.0,
+            first: true,
+        });
+        self.0.in_seq = false;
+        value
     }
 
     fn deserialize_tuple<V>(self, _len: usize, visitor: V) -> Result<V::Value>

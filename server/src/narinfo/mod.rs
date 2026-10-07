@@ -134,13 +134,13 @@ pub struct NarInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deriver: Option<String>,
 
-    /// The signature of the object.
+    /// The signatures of the object.
     ///
-    /// The `Sig` field can be duplicated to include multiple
-    /// signatures, but we only support one for now.
+    /// Each signature is in its own `Sig` field.
     #[serde(rename = "Sig")]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub signature: Option<String>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub signatures: Vec<String>,
 
     /// The content address of the object.
     #[serde(rename = "CA")]
@@ -174,11 +174,6 @@ impl NarInfo {
         nix_manifest::to_string(self)
     }
 
-    /// Returns the signature of this object, if it exists.
-    pub fn signature(&self) -> Option<&String> {
-        self.signature.as_ref()
-    }
-
     /// Returns the store directory of this object.
     pub fn store_dir(&self) -> &Path {
         // FIXME: Validate store_path
@@ -188,7 +183,7 @@ impl NarInfo {
     /// Signs the narinfo and adds the signature to the narinfo.
     pub fn sign(&mut self, keypair: &NixKeypair) {
         let signature = self.sign_readonly(keypair);
-        self.signature = Some(signature);
+        self.signatures.push(signature);
     }
 
     /// Returns the fingerprint of the object.

@@ -53,3 +53,46 @@ WantMassQuery: 1
     let parsed = super::from_str::<HypotheticalManifest>(manifest).unwrap();
     assert_eq!(parsed, expected);
 }
+
+/// A hypothetical manifest with a repeated key.
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
+struct RepeatedManifest {
+    #[serde(rename = "Sig")]
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    sigs: Vec<String>,
+
+    #[serde(rename = "Signer")]
+    signer: String,
+}
+
+#[test]
+fn test_repeated_key() {
+    let manifest = r#"
+Sig: a:1
+Sig: b:2
+Signer: c
+    "#;
+
+    let expected = RepeatedManifest {
+        sigs: vec!["a:1".to_string(), "b:2".to_string()],
+        signer: "c".to_string(),
+    };
+
+    let parsed = super::from_str::<RepeatedManifest>(manifest).unwrap();
+    assert_eq!(parsed, expected);
+
+    let round_trip = super::to_string(&parsed).unwrap();
+    assert_eq!(manifest.trim(), round_trip.trim());
+
+    let empty = RepeatedManifest {
+        sigs: vec![],
+        signer: "c".to_string(),
+    };
+    let round_trip = super::to_string(&empty).unwrap();
+    assert_eq!("Signer: c", round_trip.trim());
+    assert_eq!(
+        super::from_str::<RepeatedManifest>(&round_trip).unwrap(),
+        empty
+    );
+}

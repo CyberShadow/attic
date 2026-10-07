@@ -10,6 +10,12 @@ use super::{Error, Result};
 pub struct Serializer {
     output: String,
     seen_map: bool,
+
+    /// The key of the struct field being serialized.
+    field: Option<&'static str>,
+
+    /// The number of elements serialized so far, if serializing a sequence.
+    seq_len: Option<usize>,
 }
 
 impl Serializer {
@@ -17,6 +23,8 @@ impl Serializer {
         Self {
             output: String::new(),
             seen_map: false,
+            field: None,
+            seq_len: None,
         }
     }
 
@@ -158,8 +166,17 @@ impl ser::Serializer for &mut Serializer {
     }
 
     // Compund types
+    // A sequence is serialized as its field's key repeated for each element.
     fn serialize_seq(self, _len: Option<usize>) -> Result<Self::SerializeSeq> {
-        Err(Error::Unsupported("Sequence"))
+        if self.field.is_none() {
+            return Err(Error::Unsupported("Sequence outside of a struct field"));
+        }
+        if self.seq_len.is_some() {
+            return Err(Error::NestedSequenceUnsupported);
+        }
+
+        self.seq_len = Some(0);
+        Ok(self)
     }
 
     fn serialize_tuple(self, len: usize) -> Result<Self::SerializeTuple> {
@@ -213,16 +230,29 @@ impl ser::SerializeSeq for &mut Serializer {
     type Error = Error;
 
     // Serialize a single element of the sequence.
-    fn serialize_element<T>(&mut self, _value: &T) -> Result<()>
+    fn serialize_element<T>(&mut self, value: &T) -> Result<()>
     where
         T: ?Sized + Serialize,
     {
-        Err(Error::Unsupported("Sequence"))
+        let seq_len = self.seq_len.as_mut().unwrap();
+
+        // The field's key precedes the first element already.
+        if *seq_len > 0 {
+            self.output += "\n";
+            self.output += self.field.unwrap();
+            self.output += ": ";
+        }
+        *seq_len += 1;
+
+        value.serialize(&mut **self)
     }
 
     // Close the sequence.
     fn end(self) -> Result<()> {
-        Err(Error::Unsupported("Sequence"))
+        match self.seq_len.take().unwrap() {
+            0 => Err(Error::EmptySequenceUnsupported),
+            _ => Ok(()),
+        }
     }
 }
 
@@ -307,10 +337,12 @@ impl ser::SerializeStruct for &mut Serializer {
     where
         T: ?Sized + Serialize,
     {
+        self.field = Some(key);
         key.serialize(&mut **self)?;
         self.output += ": ";
         value.serialize(&mut **self)?;
         self.output += "\n";
+        self.field = None;
         Ok(())
     }
 

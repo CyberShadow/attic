@@ -16,6 +16,9 @@
 //! Priority: 40
 //! ```
 //!
+//! A key may be repeated to give a field multiple values (e.g. `Sig` in
+//! `.narinfo`), which maps to a sequence of the values.
+//!
 //! [1] <https://github.com/NixOS/nix/blob/d581129ef9ef5d7d65e676f6a7bfe36c82f6ea6e/src/libstore/nar-info.cc#L28>
 
 mod deserializer;
@@ -88,6 +91,12 @@ pub enum Error {
 
     /// Nested maps are unsupported.
     NestedMapUnsupported,
+
+    /// Nested sequences are unsupported.
+    NestedSequenceUnsupported,
+
+    /// Empty sequences are unsupported. Add #[serde(skip_serializing_if = "Vec::is_empty")]
+    EmptySequenceUnsupported,
 
     /// Floating point numbers are unsupported.
     FloatUnsupported,

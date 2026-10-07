@@ -53,7 +53,7 @@ Sig: cache.nixos.org-1:lo9EfNIL4eGRuNh7DTbAAffWPpI2SlYC/8uP7JnhgmfRIUNGhSbFe8qEa
             Some("vvb4wxmnjixmrkhmj2xb75z62hrr41i7-hello-2.10.drv".to_string()),
             narinfo.deriver
         );
-        assert_eq!(Some("cache.nixos.org-1:lo9EfNIL4eGRuNh7DTbAAffWPpI2SlYC/8uP7JnhgmfRIUNGhSbFe8qEaKN0mFS02TuhPpXFPNtRkFcCp0hGAQ==".to_string()), narinfo.signature);
+        assert_eq!(vec!["cache.nixos.org-1:lo9EfNIL4eGRuNh7DTbAAffWPpI2SlYC/8uP7JnhgmfRIUNGhSbFe8qEaKN0mFS02TuhPpXFPNtRkFcCp0hGAQ==".to_string()], narinfo.signatures);
     }
 
     verify_narinfo(&narinfo);
@@ -84,6 +84,53 @@ Deriver: unknown-deriver
     let narinfo = NarInfo::from_str(s).expect("Could not parse narinfo");
 
     assert_eq!(None, narinfo.deriver);
+    assert!(narinfo.signatures.is_empty());
+
+    let round_trip = narinfo.to_string().expect("Could not serialize narinfo");
+    assert!(!round_trip.contains("Sig:"));
+}
+
+#[test]
+fn test_signatures() {
+    let s = r#"
+StorePath: /nix/store/xcp9cav49dmsjbwdjlmkjxj10gkpx553-hello-2.10
+URL: nar/0nqgf15qfiacfxrgm2wkw0gwwncjqqzzalj8rs14w9srkydkjsk9.nar.xz
+Compression: xz
+NarHash: sha256:16mvl7v0ylzcg2n3xzjn41qhzbmgcn5iyarx16nn5l2r36n2kqci
+NarSize: 206104
+References: 563528481rvhc5kxwipjmg6rqrl95mdx-glibc-2.33-56 xcp9cav49dmsjbwdjlmkjxj10gkpx553-hello-2.10
+Sig: cache.nixos.org-1:lo9EfNIL4eGRuNh7DTbAAffWPpI2SlYC/8uP7JnhgmfRIUNGhSbFe8qEaKN0mFS02TuhPpXFPNtRkFcCp0hGAQ==
+Sig: other-1:c2lnbmF0dXJl
+CA: fixed:r:sha256:1n7n1pmbr0xq2zwd5ylpixglyqcrhbwv6ph9qq8vb7k8i3k4k5kn
+    "#;
+
+    let mut narinfo = NarInfo::from_str(s).expect("Could not parse narinfo");
+
+    let expected = vec![
+        "cache.nixos.org-1:lo9EfNIL4eGRuNh7DTbAAffWPpI2SlYC/8uP7JnhgmfRIUNGhSbFe8qEaKN0mFS02TuhPpXFPNtRkFcCp0hGAQ==".to_string(),
+        "other-1:c2lnbmF0dXJl".to_string(),
+    ];
+    assert_eq!(expected, narinfo.signatures);
+    assert_eq!(
+        Some("fixed:r:sha256:1n7n1pmbr0xq2zwd5ylpixglyqcrhbwv6ph9qq8vb7k8i3k4k5kn".to_string()),
+        narinfo.ca
+    );
+
+    let round_trip = narinfo.to_string().expect("Could not serialize narinfo");
+    let reparse = NarInfo::from_str(&round_trip).expect("Could not re-parse serialized narinfo");
+    assert_eq!(expected, reparse.signatures);
+
+    // Signing adds to the existing signatures.
+    let keypair = NixKeypair::generate("cache-1").expect("Could not generate keypair");
+    narinfo.sign(&keypair);
+    assert_eq!(3, narinfo.signatures.len());
+    assert_eq!(&expected[..], &narinfo.signatures[..2]);
+    keypair
+        .export_public_key()
+        .parse::<NixPublicKey>()
+        .expect("Could not import public key")
+        .verify(&narinfo.fingerprint(), &narinfo.signatures[2])
+        .expect("Could not verify signature");
 }
 
 #[test]
@@ -123,6 +170,6 @@ Sig: cache.nixos.org-1:lo9EfNIL4eGRuNh7DTbAAffWPpI2SlYC/8uP7JnhgmfRIUNGhSbFe8qEa
     assert_eq!(correct_fingerprint, fingerprint.as_slice());
 
     public_key
-        .verify(&narinfo.fingerprint(), narinfo.signature().unwrap())
+        .verify(&narinfo.fingerprint(), &narinfo.signatures[0])
         .expect("Could not verify signature");
 }
