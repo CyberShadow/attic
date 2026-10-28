@@ -242,8 +242,14 @@ fn build_http_client(token: Option<&str>) -> HttpClient {
         headers.insert(AUTHORIZATION, auth_header);
     }
 
-    reqwest::Client::builder()
-        .default_headers(headers)
-        .build()
-        .unwrap()
+    let builder = reqwest::Client::builder().default_headers(headers);
+
+    // reqwest defaults to a 30-second TCP_USER_TIMEOUT, which kills an
+    // upload whenever the server stops reading its body for that long,
+    // e.g. while its storage is busy. The kernel's retransmission timeout
+    // and keepalive probes still detect a dead peer.
+    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+    let builder = builder.tcp_user_timeout(None);
+
+    builder.build().unwrap()
 }
